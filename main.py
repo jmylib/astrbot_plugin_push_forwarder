@@ -75,7 +75,7 @@ def _data_dir() -> Path:
     PLUGIN_NAME,
     "jimmy",
     "接收 HTTP 推送并转发到多个机器人的群/私聊，支持按机器人设置转发时段",
-    "1.0.5",
+    "1.0.6",
 )
 class PushForwarder(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:

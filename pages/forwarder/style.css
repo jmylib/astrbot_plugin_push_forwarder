@@ -746,12 +746,14 @@ code {
   color: var(--text-muted);
 }
 
-.pill.sent {
+.pill.sent,
+.pill.ok {
   color: var(--ok);
   border-color: var(--ok);
 }
 
-.pill.failed {
+.pill.failed,
+.pill.bad {
   color: var(--danger);
   border-color: var(--danger);
 }

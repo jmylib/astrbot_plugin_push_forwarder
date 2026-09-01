@@ -196,16 +196,6 @@
     return baseUrl() + '?token=' + (masked ? maskToken(token) : encodeURIComponent(token));
   }
 
-  /* 企业微信群机器人兼容地址：key 是企微那套的参数名，在这里等价于 token。
-     推送方现成的「企业微信机器人」通道填这个就能用，消息体不用改。 */
-  function wecomUrl(masked) {
-    var info = state.webhook;
-    if (!info) return '';
-    var token = info.token || '';
-    if (!token) return baseUrl();
-    return baseUrl() + '?key=' + (masked ? maskToken(token) : encodeURIComponent(token));
-  }
-
   function renderWebhook() {
     var info = state.webhook;
     if (!info) return;
@@ -221,6 +211,27 @@
     dot.title = info.running
       ? '接收服务运行中' + (info.bound ? '，实际监听 ' + info.bound : '')
       : '接收服务未运行';
+
+    /* 上面那行「推送地址」的主机名取自浏览器地址栏，是给推送方填的；
+       这里是服务在 AstrBot 进程里真正 bind 到的地址。Docker 部署时两者经常
+       对不上（容器内开着、宿主机没映射），分开显示才看得出问题出在哪。 */
+    $('listen-addr').textContent =
+      (info.bound || (info.host || '0.0.0.0') + ':' + info.port) + (info.path || '');
+
+    var pill = $('listen-state');
+    if (!info.enabled) {
+      pill.textContent = '已关闭';
+      pill.className = 'pill';
+    } else if (info.running) {
+      pill.textContent = '运行中';
+      pill.className = 'pill ok';
+    } else {
+      pill.textContent = '未运行';
+      pill.className = 'pill bad';
+    }
+    $('listen-note').textContent = info.running
+      ? '容器内的监听地址，Docker 需把 ' + info.port + ' 端口映射到宿主机'
+      : '';
 
     var warn = $('service-warning');
     if (!info.enabled) {
@@ -983,9 +994,6 @@
     });
     $('copy-curl').addEventListener('click', function () {
       copyText(curlSample(), 'curl 示例');
-    });
-    $('copy-wecom').addEventListener('click', function () {
-      copyText(wecomUrl(false), '企业微信机器人地址');
     });
     $('reload-bots').addEventListener('click', function () {
       refreshAll()

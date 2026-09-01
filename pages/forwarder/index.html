@@ -26,7 +26,12 @@
           <button class="btn btn-ghost btn-sm" id="toggle-token">显示</button>
           <button class="btn btn-ghost btn-sm" id="copy-token">复制</button>
           <button class="btn btn-ghost btn-sm" id="copy-curl">复制 curl 示例</button>
-          <button class="btn btn-ghost btn-sm" id="copy-wecom" title="推送方那边「企业微信机器人」通道里填这个地址即可，消息体不用改">企微机器人地址</button>
+        </div>
+        <div class="topbar-sub">
+          <span class="label">监听</span>
+          <span class="pill" id="listen-state">检测中</span>
+          <code id="listen-addr" class="url">—</code>
+          <span class="label" id="listen-note"></span>
         </div>
       </div>
       <div class="topbar-stats">
