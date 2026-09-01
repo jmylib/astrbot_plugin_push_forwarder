@@ -342,7 +342,9 @@ class Receiver:
             )
 
         summary = result.get("summary", {})
-        status = 200 if summary.get("sent") or summary.get("queued") else 202
+        # dry_run 不会有 sent，但它是成功的，别回 202 让推送方以为没生效
+        ok = summary.get("sent") or summary.get("queued") or result.get("dry_run")
+        status = 200 if ok else 202
         return web.json_response({"status": "ok", "data": result}, status=status)
 
     async def _handle_health(self, request: Any) -> Any:

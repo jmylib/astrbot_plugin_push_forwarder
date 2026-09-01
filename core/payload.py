@@ -36,6 +36,9 @@ class PushMessage:
     at_mode: str | None = None
     at_users: list[str] = field(default_factory=list)
     urgent: bool = False
+    # 自测用：解析、路由、时段判定照常走完，但不真发也不入队。
+    # 故意不写进 to_dict/from_dict —— 自测消息不落盘，就没有重启后被当真发出去的可能。
+    dry_run: bool = False
     received_at: float = field(default_factory=now_ts)
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,6 +66,24 @@ class PushMessage:
             urgent=bool(raw.get("urgent")),
             received_at=float(raw.get("received_at") or now_ts()),
         )
+
+
+DRY_RUN_KEYS = ("dry_run", "dryrun", "dry-run")
+
+
+def _truthy(value: Any) -> bool:
+    """判断开关字段。
+
+    GET 查询串里的值全是字符串，``bool("0")`` 是 True，直接 bool() 会把
+    ``?urgent=0`` 当成真，所以字符串要单独按字面判。
+    """
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "是")
+    return bool(value)
+
+
+def _flag(raw: dict[str, Any], keys: tuple[str, ...]) -> bool:
+    return any(_truthy(raw[k]) for k in keys if k in raw)
 
 
 def _first_str(raw: dict[str, Any], keys: tuple[str, ...]) -> str:
@@ -270,7 +291,8 @@ def parse_wecom_payload(
         target_ids=_as_list(next((raw[k] for k in TARGET_KEYS if k in raw), None)),
         at_mode=explicit_mode or at_mode,
         at_users=explicit_users,
-        urgent=bool(raw.get("urgent") or raw.get("force")),
+        urgent=_flag(raw, ("urgent", "force")),
+        dry_run=_flag(raw, DRY_RUN_KEYS),
     )
 
 
@@ -313,7 +335,8 @@ def parse_payload(raw: Any, default_tags: list[str] | None = None) -> PushMessag
         target_ids=_as_list(next((raw[k] for k in TARGET_KEYS if k in raw), None)),
         at_mode=at_mode,
         at_users=at_users,
-        urgent=bool(raw.get("urgent") or raw.get("force")),
+        urgent=_flag(raw, ("urgent", "force")),
+        dry_run=_flag(raw, DRY_RUN_KEYS),
     )
 
 

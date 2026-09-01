@@ -1134,6 +1134,96 @@ def test_normal_push_response_shape_unchanged():
     assert "errcode" not in resp.data
 
 
+def test_dry_run_matches_targets_without_sending():
+    """自测要走完筛选，但一条都不能真发出去。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+    add_target(plugin, QQ, "g2")
+
+    result = asyncio.run(plugin.dispatcher.dispatch(PushMessage(text="自测", dry_run=True)))
+
+    assert result["dry_run"] is True
+    assert result["summary"]["dry_run"] == 2
+    assert result["summary"]["sent"] == 0
+    assert ctx.sent == []
+
+
+def test_dry_run_reports_tag_mismatch():
+    """标签对不上时命中 0 个 —— 这正是"推送成功但群里没消息"的常见原因。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1", tags=["alert"])
+
+    result = asyncio.run(
+        plugin.dispatcher.dispatch(PushMessage(text="x", tags=["other"], dry_run=True))
+    )
+    assert result["summary"]["dry_run"] == 0
+    assert ctx.sent == []
+
+
+def test_dry_run_does_not_enqueue_outside_schedule():
+    """排进队列就会在时段开始时真发出去，那就不叫自测了。"""
+    plugin, ctx, _ = make_plugin()
+    target = add_target(plugin, QQ, "g1")
+    cfg = plugin.store.get_bot(QQ)
+    cfg.schedule = closed_schedule("queue")
+    plugin.store.set_bot(QQ, cfg)
+
+    result = asyncio.run(plugin.dispatcher.dispatch(PushMessage(text="x", dry_run=True)))
+
+    assert result["summary"]["queued"] == 1
+    assert plugin.dispatcher.queue.count(target.id) == 0
+    assert ctx.sent == []
+
+
+def test_dry_run_not_written_to_history():
+    plugin, _, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+    asyncio.run(plugin.dispatcher.dispatch(PushMessage(text="自测", dry_run=True)))
+
+    stub.request.bind(query={"limit": "10"})
+    records = asyncio.run(plugin.api_history())["data"]["records"]
+    assert records == [], "自测不该混进推送记录"
+
+
+def test_push_endpoint_dry_run_returns_200():
+    """dry_run 没有 sent，但它是成功的，不能回 202 让推送方以为没生效。"""
+    plugin, ctx, _ = make_plugin(receiver_token="secret-token")
+    add_target(plugin, QQ, "g1")
+    receiver = with_fake_web(plugin)
+
+    resp = asyncio.run(
+        receiver._handle_push(
+            FakeRequest(
+                headers={"X-Token": "secret-token"},
+                json_body={"text": "自测", "dry_run": True},
+            )
+        )
+    )
+    assert resp.status == 200
+    assert resp.data["data"]["dry_run"] is True
+    assert ctx.sent == []
+
+
+def test_api_selftest_reports_service_down():
+    """接收服务没起来时直接说清楚，不要去打一个必定超时的回环请求。"""
+    plugin, _, _ = make_plugin(receiver_enabled=True)
+    plugin.receiver.running = False
+    plugin.receiver.last_error = "端口 9966 启动失败"
+
+    data = asyncio.run(plugin.api_selftest())["data"]
+    assert data["ok"] is False
+    assert data["stage"] == "listen"
+    assert "端口 9966 启动失败" in data["message"]
+
+
+def test_api_selftest_reports_disabled():
+    plugin, _, cfg = make_plugin()
+    cfg["receiver_enabled"] = False
+
+    data = asyncio.run(plugin.api_selftest())["data"]
+    assert data["ok"] is False and data["stage"] == "disabled"
+
+
 def _run_all() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

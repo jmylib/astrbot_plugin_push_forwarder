@@ -45,6 +45,8 @@ STATUS_SENT = "sent"
 STATUS_QUEUED = "queued"
 STATUS_SKIPPED = "skipped"
 STATUS_FAILED = "failed"
+# 自测：本来会发到这个目标，但因为 dry_run 停在了发送前一步
+STATUS_DRY_RUN = "dry_run"
 
 PREVIEW_LENGTH = 80
 
@@ -314,16 +316,34 @@ class Dispatcher:
                     )
                 )
             else:
-                self.queue.push(target.id, message)
+                # 自测不入队：排进去就会在时段开始时真发出去，那就不是自测了
+                if not message.dry_run:
+                    self.queue.push(target.id, message)
                 nxt = next_open_at(schedule)
                 when = nxt.strftime("%m-%d %H:%M") if nxt else "未知"
+                prefix = "不在转发时段，实发时会排队到" if message.dry_run else "不在转发时段，将于"
                 results.append(
                     self._record(
                         target,
                         STATUS_QUEUED,
-                        f"不在转发时段，将于 {when} 补发",
+                        f"{prefix} {when} 补发",
                     )
                 )
+
+        if message.dry_run:
+            # 走到这里说明解析、路由、时段判定都通过了，唯独不真发。
+            # 也不写 history —— 自测不该混进推送记录里。
+            for target in to_send:
+                results.append(
+                    self._record(
+                        target, STATUS_DRY_RUN, "链路正常，实发时这条会送到这里"
+                    )
+                )
+            return {
+                "summary": self._summarize(results),
+                "results": results,
+                "dry_run": True,
+            }
 
         if to_send:
             results.extend(await self._send_all(to_send, message))
@@ -478,6 +498,7 @@ class Dispatcher:
             STATUS_QUEUED: 0,
             STATUS_SKIPPED: 0,
             STATUS_FAILED: 0,
+            STATUS_DRY_RUN: 0,
         }
         for item in results:
             status = item.get("status")

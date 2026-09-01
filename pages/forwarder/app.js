@@ -169,21 +169,29 @@
 
   // ------------------------------------------------------------------ 顶部条
 
-  /* 生成地址用的主机名。
-   * 监听在 0.0.0.0 时服务端并不知道推送方该用哪个 IP，默认取 WebUI 当前地址，
-   * 但用户从内网打开 WebUI、推送方却在外网时这个值是错的，所以允许手动覆盖。 */
-  function webhookHost() {
-    var manual = (state.hostOverride || '').trim();
-    if (manual) return manual;
+  /* 推送地址的前缀（协议 + 主机 + 端口）。
+
+     监听在 0.0.0.0 时服务端并不知道推送方该用哪个 IP，默认取 WebUI 当前地址，
+     但用户从内网打开 WebUI、推送方却在外网时这个值是错的，所以允许手动覆盖。
+
+     覆盖值里带 :// 就整段当前缀用。不少部署把 AstrBot 放在 Caddy / Nginx 后面，
+     对外是 443 上的一个路径，根本没有 9966 这个端口，只填主机名表达不了。 */
+  function originPrefix() {
     var info = state.webhook;
-    if (info && info.host && info.host !== '0.0.0.0' && info.host !== '::') return info.host;
-    return location.hostname || '你的服务器IP';
+    var manual = (state.hostOverride || '').trim().replace(/\/+$/, '');
+    if (manual.indexOf('://') > 0) return manual;
+    var host = manual;
+    if (!host && info && info.host && info.host !== '0.0.0.0' && info.host !== '::') {
+      host = info.host;
+    }
+    if (!host) host = location.hostname || '你的服务器IP';
+    return 'http://' + host + ':' + (info ? info.port : '');
   }
 
   function baseUrl() {
     var info = state.webhook;
     if (!info) return '';
-    return 'http://' + webhookHost() + ':' + info.port + info.path;
+    return originPrefix() + info.path;
   }
 
   /* 带 Token 的完整地址：很多推送工具只给填一个 URL，没法加请求头。 */
@@ -244,6 +252,145 @@
     } else {
       warn.className = 'banner banner-warn hidden';
     }
+  }
+
+  /* ---------------------------------------------------------------- 自测
+
+     分两步打，因为两步失败的含义完全不同：
+
+     1. 服务端回环 —— AstrBot 进程访问自己的监听端口。过了说明服务本身、Token、
+        标签路由、转发时段这一整条链路都没问题。
+     2. 浏览器直连 —— 从你这台电脑打上面那个推送地址。过了说明端口确实暴露到了
+        容器外、防火墙也放行了。
+
+     只有 1 过 2 不过，问题就在 Docker 端口映射或防火墙；两个都不过，问题在插件
+     或配置本身。分开报才定位得了。
+
+     浏览器这一步用 no-cors：接收服务不发 CORS 头，跨端口读不到响应内容，但请求
+     在网络层通没通是能区分的 —— 通了 fetch 会 resolve 出一个 opaque 响应，不通
+     直接 reject。所以这一步只能回答「端口可达吗」，回答不了「返回了什么」。 */
+
+  /* /health 和 /push 一样要带 Token，路径却是固定的，不随 receiver_path 变。 */
+  function healthUrl() {
+    return state.webhook ? originPrefix() + '/health' : '';
+  }
+
+  function renderSelfTest(rows) {
+    var box = $('selftest-panel');
+    box.textContent = '';
+    rows.forEach(function (r) {
+      box.appendChild(
+        el('div', { class: 'selftest-row' }, [
+          el('span', { class: 'pill ' + (r.cls || ''), text: r.state }),
+          el('strong', { text: r.name || '' }),
+          el('span', { class: 'selftest-detail', text: r.detail || '' })
+        ])
+      );
+    });
+    box.className = 'selftest';
+  }
+
+  /* 浏览器 → 监听地址。打 /health 而不是 /push：no-cors 下读不到响应，两者能给出的
+     信息一样多（就是「通没通」），那就选没有副作用的那个 —— /health 不碰分发器，
+     不会因为反复点自测而触发任何转发逻辑。
+     措辞也别写成"推送成功"：这一探回答的只是端口可达，不是推送生效。 */
+  function probeFromBrowser() {
+    var info = state.webhook;
+    if (!info) return Promise.resolve({ cls: '', state: '跳过', detail: '推送地址还没加载出来' });
+    if (location.protocol === 'https:') {
+      // 浏览器不允许 https 页面发 http 请求，这里探不了，不是端口的问题
+      return Promise.resolve({
+        cls: '',
+        state: '跳过',
+        detail: '面板是 https，浏览器禁止向 http 的监听地址发请求，请手动用 curl 验证'
+      });
+    }
+    var url = healthUrl() + '?token=' + encodeURIComponent(info.token || '');
+    /* 反向代理到面板同一个域名时是同源请求，能直接读到响应体，
+       这时就不必退而求其次只判"通没通"了。 */
+    var sameOrigin = url.indexOf(location.origin + '/') === 0;
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 5000) : null;
+    var started = Date.now();
+    return fetch(url, {
+      method: 'GET',
+      mode: sameOrigin ? 'cors' : 'no-cors',
+      signal: ctrl ? ctrl.signal : undefined
+    })
+      .then(function (resp) {
+        if (timer) clearTimeout(timer);
+        var ms = Date.now() - started;
+        if (!sameOrigin) {
+          return {
+            cls: 'ok',
+            state: '可达',
+            detail: healthUrl() + ' 从你这台电脑能连上（' + ms + ' ms）'
+          };
+        }
+        if (resp.status === 401) {
+          return { cls: 'bad', state: 'Token 不符', detail: healthUrl() + ' 通了，但 Token 没通过' };
+        }
+        if (resp.status >= 400) {
+          return {
+            cls: 'bad',
+            state: 'HTTP ' + resp.status,
+            detail: healthUrl() + ' 返回了 ' + resp.status + '，多半是反向代理没把这个路径转到接收端口'
+          };
+        }
+        return {
+          cls: 'ok',
+          state: '正常',
+          detail: healthUrl() + ' 可达且 Token 有效（' + ms + ' ms）'
+        };
+      })
+      .catch(function () {
+        if (timer) clearTimeout(timer);
+        return {
+          cls: 'bad',
+          state: '不可达',
+          detail: healthUrl() + ' 连不上。Docker 要在 compose 的 ports 里加 '
+            + info.port + ':' + info.port + ' 并重建容器；'
+            + '已经有 Nginx / Caddy 的话，更省事的做法是把 /push 和 /health 反代到 '
+            + '127.0.0.1:' + info.port + '，然后在上面的「主机」里填反代地址'
+        };
+      });
+  }
+
+  function runSelfTest() {
+    var btn = $('run-selftest');
+    btn.disabled = true;
+    btn.textContent = '自测中…';
+    renderSelfTest([{ cls: '', state: '进行中', name: '正在自测', detail: '最多等 5 秒' }]);
+
+    var serverRow = apiPost('selftest').then(
+      function (d) {
+        var detail = d.message || '';
+        if (d.http_status) detail += '（HTTP ' + d.http_status + '，' + (d.elapsed_ms || 0) + ' ms）';
+        var s = d.summary || {};
+        var hit = (s.dry_run || 0) + (s.queued || 0);
+        if (d.ok) {
+          detail += hit
+            ? '；本次会命中 ' + hit + ' 个转发目标'
+            : '；但没有任何转发目标会命中 —— 目标没配、被停用，或标签对不上';
+        }
+        return { cls: d.ok ? 'ok' : 'bad', state: d.ok ? '正常' : '异常', detail: detail };
+      },
+      function (e) {
+        return { cls: 'bad', state: '异常', detail: (e && e.message) || '接口调用失败' };
+      }
+    );
+
+    Promise.all([serverRow, probeFromBrowser()])
+      .then(function (rows) {
+        rows[0].name = '服务端回环';
+        rows[1].name = '浏览器直连';
+        renderSelfTest(rows);
+      })
+      .then(null, fail)
+      .then(function () {
+        btn.disabled = false;
+        btn.textContent = '自测连通性';
+      });
   }
 
   function maskToken(token) {
@@ -995,6 +1142,7 @@
     $('copy-curl').addEventListener('click', function () {
       copyText(curlSample(), 'curl 示例');
     });
+    $('run-selftest').addEventListener('click', runSelfTest);
     $('reload-bots').addEventListener('click', function () {
       refreshAll()
         .then(function () {

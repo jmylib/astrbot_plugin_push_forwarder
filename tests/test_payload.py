@@ -311,6 +311,34 @@ def test_wecom_tolerates_flat_shorthand():
     assert msg.text == "偷懒写法"
 
 
+def test_dry_run_flag_parsed():
+    for key in ("dry_run", "dryrun", "dry-run"):
+        assert parse_payload({"text": "x", key: True}).dry_run, key
+    assert not parse_payload({"text": "x"}).dry_run
+
+
+def test_query_string_false_values_are_not_truthy():
+    """GET 查询串传过来全是字符串，bool("0") 是 True，不能直接 bool()。"""
+    assert not parse_payload({"text": "x", "dry_run": "0"}).dry_run
+    assert not parse_payload({"text": "x", "urgent": "false"}).urgent
+    assert parse_payload({"text": "x", "dry_run": "1"}).dry_run
+    assert parse_payload({"text": "x", "urgent": "true"}).urgent
+
+
+def test_dry_run_never_survives_persistence():
+    """自测消息不落盘，重启后就不可能被当成真消息发出去。"""
+    msg = parse_payload({"text": "x", "dry_run": True})
+    assert "dry_run" not in msg.to_dict()
+    assert not PushMessage.from_dict(msg.to_dict()).dry_run
+
+
+def test_wecom_payload_supports_dry_run():
+    msg = parse_payload(
+        {"msgtype": "text", "text": {"content": "自测"}, "dry_run": True}
+    )
+    assert msg.dry_run and msg.text == "自测"
+
+
 def _run_all() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
