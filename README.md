@@ -118,24 +118,45 @@ Token 在插件首次加载时自动生成并写入配置，可在面板或插�
 | `targets` | `target`、`to` | 直接指定目标编号，指定后忽略标签路由 |
 | `at` | — | `true` / `"all"` / `["用户ID"]` / `{"mode":"users","users":[...]}` |
 | `urgent` | `force` | `true` 时忽略转发时段立即发送 |
-| `dry_run` | `dryrun`、`dry-run` | `true` 时只做自测：解析、标签路由、时段判定照常走完，但不真发也不入队，响应里 `summary.dry_run` 是会命中的目标数 |
+| `dry_run` | `dryrun`、`dry-run` | `true` 时只试不发：解析、标签路由、时段判定照常走完，但不发送、不入队、不写推送记录。响应里 `summary.dry_run` 是这条推送会命中的目标数 |
 
 `title` 与 `text` 至少要有一个，否则返回 400。
 
 布尔字段按字面判：`?dry_run=0`、`?urgent=false` 都是假，不会因为查询串里全是字符串就被当成真。
 
-### 自测连通性
+### 接通之后怎么验
 
-面板顶部「监听」那一行有个**自测连通性**按钮，点一次会打两枪：
+三步，一步比一步深，出问题就停在那一步：
 
-| 探测 | 打哪 | 说明 |
-| --- | --- | --- |
-| 服务端回环 | AstrBot 进程 → `127.0.0.1:<端口><路径>` | 带 `dry_run` 的真实 POST，验证服务、Token、标签路由、转发时段整条链路，并告诉你这条推送会命中几个目标 |
-| 浏览器直连 | 你的浏览器 → `/health` | 验证端口有没有真的暴露到容器外、防火墙放没放行 |
+```bash
+# 1. 端口通不通、Token 对不对（不碰分发器，随便点）
+curl -s "http://宿主机IP:9966/health?token=你的Token"
 
-两个结果要合起来看：**回环过、直连不过 = 端口映射或防火墙的问题**；两个都不过 = 插件或配置本身的问题。
+# 2. 整条链路走一遍，但不真发到群里；看 summary.dry_run 是几
+curl -s -X POST "http://宿主机IP:9966/push?token=你的Token"   -H "Content-Type: application/json" --data-binary @push.json
 
-浏览器这一枪打 `/health` 而不是 `/push`，因为它不碰分发器，反复点也没有副作用。跨端口时浏览器读不到响应内容（接收服务不发 CORS 头），所以只能回答「可达」；反代到面板同一个域名下就是同源请求，能读到真实状态码。
+# 3. 去掉 dry_run，群里应该就收到了
+```
+
+`push.json`（**存成 UTF-8**）：
+
+```json
+{"title":"服务器告警","text":"CPU 使用率 95%","tags":["alert"],"dry_run":true}
+```
+
+第 2 步返回 `"dry_run": 1` 表示会命中 1 个目标；返回 `0` 说明目标没配、被停用，或者标签对不上
+—— 这正是「推送返回成功但群里没消息」最常见的原因。
+
+Windows 上别把中文直接写在 `-d '…'` 里：cmd / PowerShell 会按 GBK 编码命令行，
+服务端会收到 `'utf-8' codec can't decode byte 0xb7`。要么像上面那样用 UTF-8 文件，
+要么用 PowerShell 显式转字节：
+
+```powershell
+$body = @{ text='CPU 使用率 95%'; dry_run=$true } | ConvertTo-Json
+Invoke-RestMethod -Uri 'http://宿主机IP:9966/push' -Method Post `
+  -Headers @{ 'X-Token'='你的Token' } -ContentType 'application/json' `
+  -Body ([Text.Encoding]::UTF8.GetBytes($body))
+```
 
 ### 对接「企业微信机器人」通道
 

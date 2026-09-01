@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +75,7 @@ def _data_dir() -> Path:
     PLUGIN_NAME,
     "jimmy",
     "接收 HTTP 推送并转发到多个机器人的群/私聊，支持按机器人设置转发时段",
-    "1.0.7",
+    "1.0.8",
 )
 class PushForwarder(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -474,7 +473,6 @@ class PushForwarder(Star):
             ("history", self.api_history, ["GET"], "推送历史"),
             ("webhook", self.api_webhook, ["GET"], "推送地址与状态"),
             ("ping", self.api_ping, ["GET"], "连通性自检"),
-            ("selftest", self.api_selftest, ["POST"], "回环自测推送接口"),
         ]
         registered: list[str] = []
         for prefix in ROUTE_PREFIXES:
@@ -792,103 +790,6 @@ class PushForwarder(Star):
             limit = 30
         return json_response(
             {"status": "ok", "data": {"records": self.history.list(min(200, limit))}}
-        )
-
-    async def api_selftest(self):
-        """从 AstrBot 进程内回环访问自己的接收端口，验证整条推送链路。
-
-        走真实 HTTP 而不是直接调函数：端口没开、路径写错、Token 不对、IP 白名单
-        把自己挡了 —— 这些只有真发一次才暴露得出来。请求带 dry_run，所以会走完
-        解析、标签路由和时段判定，但不会真往群里发消息。
-
-        注意这一步只证明「AstrBot 容器内部是通的」。推送方在别的机器上，端口有没有
-        映射出去、防火墙放没放行，得由浏览器那一侧再探一次，两边结果合起来才能
-        定位问题出在哪一侧。
-        """
-        if not bool(self.config.get("receiver_enabled", True)):
-            return json_response(
-                {
-                    "status": "ok",
-                    "data": {
-                        "ok": False,
-                        "stage": "disabled",
-                        "message": "接收服务已在插件配置里关闭",
-                    },
-                }
-            )
-        if not self.receiver.running:
-            return json_response(
-                {
-                    "status": "ok",
-                    "data": {
-                        "ok": False,
-                        "stage": "listen",
-                        "message": "接收服务未运行："
-                        + (self.receiver.last_error or "原因未知"),
-                    },
-                }
-            )
-
-        # 监听在 0.0.0.0 时用回环地址访问；绑定了具体 IP 就只能走那个 IP
-        host = self.receiver.host
-        if host in ("0.0.0.0", "::", ""):
-            host = "127.0.0.1"
-        url = f"http://{host}:{self.receiver.port}{self.receiver.path}"
-
-        started = time.monotonic()
-        try:
-            import aiohttp
-
-            timeout = aiohttp.ClientTimeout(total=5)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    url,
-                    json={"text": "面板自测（dry_run，不会真的发到群里）", "dry_run": True},
-                    headers={"X-Token": str(self.config.get("receiver_token") or "")},
-                ) as resp:
-                    http_status = resp.status
-                    body = await resp.json(content_type=None)
-        except Exception as e:  # noqa: BLE001
-            return json_response(
-                {
-                    "status": "ok",
-                    "data": {
-                        "ok": False,
-                        "stage": "request",
-                        "url": url,
-                        "elapsed_ms": int((time.monotonic() - started) * 1000),
-                        "message": f"回环请求失败：{e}",
-                    },
-                }
-            )
-
-        elapsed = int((time.monotonic() - started) * 1000)
-        body = body if isinstance(body, dict) else {}
-        data = body.get("data") if isinstance(body.get("data"), dict) else {}
-
-        if http_status == 403:
-            message = "IP 白名单把回环地址挡住了，把 127.0.0.1 加进白名单才能自测"
-        elif http_status == 401:
-            message = "Token 校验没过。面板与接收服务读的是同一份配置，出现这个多半是改了配置还没重载插件"
-        elif http_status >= 400:
-            message = str(body.get("message") or f"接收服务返回 HTTP {http_status}")
-        else:
-            message = "接收服务在容器内可达，推送链路正常"
-
-        return json_response(
-            {
-                "status": "ok",
-                "data": {
-                    "ok": http_status < 400,
-                    "stage": "done" if http_status < 400 else "reject",
-                    "url": url,
-                    "http_status": http_status,
-                    "elapsed_ms": elapsed,
-                    "message": message,
-                    "summary": data.get("summary") or {},
-                    "results": data.get("results") or [],
-                },
-            }
         )
 
     async def api_webhook(self):

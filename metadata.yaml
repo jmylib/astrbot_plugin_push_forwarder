@@ -2,7 +2,7 @@ name: astrbot_plugin_push_forwarder
 display_name: 推送转发
 desc: 接收外部 HTTP 推送，按可视化配置转发到多个机器人实例的群聊 / 私聊。支持按机器人设置转发时段、标签路由、@ 提醒、超时段排队补发。
 short_desc: HTTP 推送转发到多机器人多会话，支持转发时段
-version: 1.0.7
+version: 1.0.8
 author: jimmy
 repo: https://github.com/jmylib/astrbot_plugin_push_forwarder
 support_platforms:

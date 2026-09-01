@@ -1204,26 +1204,6 @@ def test_push_endpoint_dry_run_returns_200():
     assert ctx.sent == []
 
 
-def test_api_selftest_reports_service_down():
-    """接收服务没起来时直接说清楚，不要去打一个必定超时的回环请求。"""
-    plugin, _, _ = make_plugin(receiver_enabled=True)
-    plugin.receiver.running = False
-    plugin.receiver.last_error = "端口 9966 启动失败"
-
-    data = asyncio.run(plugin.api_selftest())["data"]
-    assert data["ok"] is False
-    assert data["stage"] == "listen"
-    assert "端口 9966 启动失败" in data["message"]
-
-
-def test_api_selftest_reports_disabled():
-    plugin, _, cfg = make_plugin()
-    cfg["receiver_enabled"] = False
-
-    data = asyncio.run(plugin.api_selftest())["data"]
-    assert data["ok"] is False and data["stage"] == "disabled"
-
-
 def _run_all() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
