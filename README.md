@@ -365,7 +365,3 @@ curl -i -H "X-Token: 你的Token" http://宿主机IP:9966/health
 **重载插件后提示端口被占用？**
 插件在 `terminate()` 里会释放端口。若仍被占用，多半是上一次进程未正常退出，
 可改用其他端口，或重启 AstrBot。
-
-**能不能不开额外端口？**
-不能。AstrBot 的 Dashboard 对 `/api` 全路径启用了 JWT 鉴权，外部推送方无法提供
-Dashboard 的 token，因此接收服务必须独立监听。面板自身的接口则走 Dashboard 转发，无需额外鉴权。
