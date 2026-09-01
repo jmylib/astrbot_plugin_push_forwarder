@@ -1,0 +1,2 @@
+# 仓库里一律存 LF：AstrBot 多数跑在 Linux 容器里，避免换行符来回翻搅
+* text=auto eol=lf

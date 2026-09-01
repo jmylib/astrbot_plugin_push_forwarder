@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "forwarder": {
+      "title": "推送转发",
+      "description": "配置 HTTP 推送的转发目标与各机器人的转发时段"
+    }
+  }
+}

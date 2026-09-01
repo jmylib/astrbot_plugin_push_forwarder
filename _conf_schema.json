@@ -1,0 +1,113 @@
+{
+  "receiver_enabled": {
+    "description": "启用 HTTP 推送接收服务",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后插件仍可通过 /fwd 指令和 WebUI 面板管理目标，但不再监听 HTTP 端口。"
+  },
+  "receiver_host": {
+    "description": "监听地址",
+    "type": "string",
+    "default": "0.0.0.0",
+    "hint": "0.0.0.0 表示允许外部访问；只在本机推送时建议改为 127.0.0.1。"
+  },
+  "receiver_port": {
+    "description": "监听端口",
+    "type": "int",
+    "default": 9966,
+    "hint": "需与 AstrBot WebUI 端口（默认 6185）以及其他插件端口错开。"
+  },
+  "receiver_path": {
+    "description": "推送路径",
+    "type": "string",
+    "default": "/push",
+    "hint": "最终地址形如 http://<服务器IP>:<端口>/push"
+  },
+  "receiver_token": {
+    "description": "推送鉴权 Token",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "obvious_hint": true,
+    "hint": "留空则首次启动自动生成一个随机 Token 并写回此处。推送时通过 X-Token 请求头、Authorization: Bearer、body 的 token 字段或 ?token= 查询参数传入。注意：手动清空并不等于关闭鉴权，而是拒绝所有请求；要停用请关掉上面的「启用 HTTP 推送接收服务」。"
+  },
+  "receiver_ip_whitelist": {
+    "description": "来源 IP 白名单",
+    "type": "list",
+    "default": [],
+    "hint": "留空表示不限制。支持精确 IP（1.2.3.4）与 CIDR 网段（192.168.1.0/24）。端口要暴露到公网时，把来源限制到推送方的地址或网段是最有效的一层防护，先于 Token 校验生效。"
+  },
+  "format_template": {
+    "description": "消息渲染模板",
+    "type": "text",
+    "default": "{title}\n{text}",
+    "hint": "可用变量：{title} {text} {tag} {time}。当 title 或 text 为空时会自动清理多余空行。"
+  },
+  "format_max_length": {
+    "description": "单条消息最大长度",
+    "type": "int",
+    "default": 2000,
+    "hint": "超出后按下面的策略处理。0 表示不限制。"
+  },
+  "format_split_long_message": {
+    "description": "超长消息自动分条发送",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭则直接截断并在末尾追加省略号。"
+  },
+  "dispatch_concurrency": {
+    "description": "机器人间并发数",
+    "type": "int",
+    "default": 4,
+    "hint": "同一机器人下的多个目标始终串行发送以规避风控；此项控制不同机器人之间的并发。"
+  },
+  "dispatch_interval_ms": {
+    "description": "同机器人相邻两条消息的间隔（毫秒）",
+    "type": "int",
+    "default": 600,
+    "hint": "防止触发平台风控。QQ 官方机器人建议不低于 500。"
+  },
+  "dispatch_retry_times": {
+    "description": "发送失败重试次数",
+    "type": "int",
+    "default": 2,
+    "hint": "采用指数退避（1s、2s、4s……）。"
+  },
+  "dispatch_merge_queued": {
+    "description": "合并排队消息",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，超出转发时段而排队的多条消息会在时段开始时合并为一条发送，避免刷屏。"
+  },
+  "queue_max_size": {
+    "description": "每个目标的最大排队条数",
+    "type": "int",
+    "default": 50,
+    "hint": "超出后丢弃最旧的消息。"
+  },
+  "history_max_records": {
+    "description": "保留的推送记录条数",
+    "type": "int",
+    "default": 200,
+    "hint": "用于 WebUI 面板中的推送历史展示。"
+  },
+  "session_discovery_enabled": {
+    "description": "启用会话发现",
+    "type": "bool",
+    "default": true,
+    "obvious_hint": true,
+    "hint": "QQ 官方机器人与微信 ClawBot 无法查询群/好友列表，只能通过监听收到的消息来发现可选会话。关闭后 WebUI 面板将无法列出可勾选的群和私聊。"
+  },
+  "session_max_count": {
+    "description": "最多记录的会话数",
+    "type": "int",
+    "default": 500,
+    "hint": "超出后按最后活跃时间淘汰最旧的。"
+  },
+  "session_expire_days": {
+    "description": "会话过期天数",
+    "type": "int",
+    "default": 30,
+    "hint": "超过该天数未活跃的会话会从列表中清理（已配置为转发目标的会话不会被清理）。"
+  }
+}

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>推送转发</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部：推送地址与服务状态 -->
+    <header class="topbar">
+      <div class="topbar-main">
+        <div class="topbar-title">
+          <span class="dot" id="service-dot"></span>
+          <strong>推送地址</strong>
+          <code id="webhook-url" class="url">加载中…</code>
+          <button class="btn btn-primary btn-sm" id="copy-full-url">复制完整地址（含 Token）</button>
+          <button class="btn btn-ghost btn-sm" id="copy-url">仅复制地址</button>
+        </div>
+        <div class="topbar-sub">
+          <span class="label">主机</span>
+          <input id="webhook-host" class="host-input" placeholder="自动检测" title="推送方访问 AstrBot 用的 IP 或域名，只影响这里生成的地址" />
+          <span class="label">Token</span>
+          <code id="webhook-token" class="token">••••••••</code>
+          <button class="btn btn-ghost btn-sm" id="toggle-token">显示</button>
+          <button class="btn btn-ghost btn-sm" id="copy-token">复制</button>
+          <button class="btn btn-ghost btn-sm" id="copy-curl">复制 curl 示例</button>
+          <button class="btn btn-ghost btn-sm" id="copy-wecom" title="推送方那边「企业微信机器人」通道里填这个地址即可，消息体不用改">企微机器人地址</button>
+        </div>
+      </div>
+      <div class="topbar-stats">
+        <div class="stat"><span id="stat-targets">0</span><small>转发目标</small></div>
+        <div class="stat"><span id="stat-queued">0</span><small>待补发</small></div>
+        <button class="btn btn-ghost btn-sm" id="open-history">推送记录</button>
+      </div>
+    </header>
+
+    <div id="service-warning" class="banner banner-warn hidden"></div>
+
+    <!-- 三栏主体 -->
+    <main class="columns">
+      <!-- 左：机器人 -->
+      <section class="col col-bots">
+        <div class="col-head">
+          <h2>机器人</h2>
+          <button class="btn btn-ghost btn-sm" id="reload-bots">刷新</button>
+        </div>
+        <p class="col-hint">点击一行即选中该机器人，中间和右边两栏会跟着切换。</p>
+        <div class="col-body" id="bot-list"></div>
+      </section>
+
+      <!-- 中：会话 -->
+      <section class="col col-sessions">
+        <div class="col-head">
+          <h2>可选会话</h2>
+          <button class="btn btn-ghost btn-sm hidden" id="refresh-sessions">从平台拉取</button>
+        </div>
+        <div class="tabs" id="session-tabs">
+          <button class="tab active" data-type="GroupMessage">群聊</button>
+          <button class="tab" data-type="FriendMessage">私聊</button>
+        </div>
+        <div class="search-row">
+          <input type="search" id="session-search" placeholder="搜索名称、ID 或最近发言人" />
+        </div>
+        <div class="col-body" id="session-list"></div>
+      </section>
+
+      <!-- 右：转发目标 -->
+      <section class="col col-targets">
+        <div class="col-head">
+          <h2>转发目标 <span class="muted" id="target-count"></span></h2>
+          <label class="filter-toggle">
+            <input type="checkbox" id="filter-current-bot" checked />
+            仅当前机器人
+          </label>
+        </div>
+        <div class="col-body" id="target-list"></div>
+        <div class="col-foot">
+          <button class="btn btn-primary" id="save-targets" disabled>保存</button>
+          <button class="btn btn-ghost" id="test-targets">发送测试消息</button>
+          <span class="save-hint" id="save-hint"></span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 转发时段编辑弹窗 -->
+  <div class="modal-mask hidden" id="schedule-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>转发时段 · <span id="schedule-bot-name"></span></h3>
+        <button class="btn btn-ghost btn-sm" id="schedule-close">关闭</button>
+      </div>
+      <div class="modal-body">
+        <label class="switch-row">
+          <input type="checkbox" id="schedule-enabled" />
+          <span>启用时段限制（关闭则全天转发）</span>
+        </label>
+
+        <div class="field">
+          <span class="field-label">时区</span>
+          <input list="tz-list" id="schedule-tz" placeholder="Asia/Shanghai" />
+          <datalist id="tz-list">
+            <option value="Asia/Shanghai"></option>
+            <option value="Asia/Tokyo"></option>
+            <option value="Asia/Singapore"></option>
+            <option value="Asia/Bangkok"></option>
+            <option value="UTC"></option>
+            <option value="Europe/London"></option>
+            <option value="America/New_York"></option>
+            <option value="UTC+8"></option>
+          </datalist>
+        </div>
+
+        <div class="field">
+          <span class="field-label">星期</span>
+          <div class="days" id="schedule-days"></div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">时间段</span>
+          <div id="schedule-ranges"></div>
+          <button class="btn btn-ghost btn-sm" id="add-range">添加时间段</button>
+          <p class="hint">结束时间早于开始时间表示跨零点，例如 22:00 - 02:00。</p>
+        </div>
+
+        <div class="field">
+          <span class="field-label">时段外的消息</span>
+          <div class="radios" id="schedule-action">
+            <label><input type="radio" name="outside" value="queue" /> 排队，进入时段后补发</label>
+            <label><input type="radio" name="outside" value="drop" /> 直接丢弃</label>
+            <label><input type="radio" name="outside" value="send" /> 照常发送（不限制）</label>
+          </div>
+        </div>
+
+        <p class="preview" id="schedule-preview"></p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary" id="schedule-save">保存时段</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 推送记录弹窗 -->
+  <div class="modal-mask hidden" id="history-modal">
+    <div class="modal modal-wide">
+      <div class="modal-head">
+        <h3>推送记录</h3>
+        <button class="btn btn-ghost btn-sm" id="history-close">关闭</button>
+      </div>
+      <div class="modal-body" id="history-body"></div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+
+  <!-- defer + ./ 前缀：bridge SDK 由 AstrBot 注入进本页，注入位置不确定，
+       延后到文档解析完再跑；相对路径带 ./ 以免页面 URL 不带尾斜杠时解析到上级目录 -->
+  <script src="./app.js" defer></script>
+</body>
+</html>

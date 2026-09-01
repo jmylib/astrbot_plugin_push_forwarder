@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "forwarder": {
+      "title": "Push Forwarder",
+      "description": "Configure forwarding targets and per-bot schedules for incoming HTTP pushes"
+    }
+  }
+}
