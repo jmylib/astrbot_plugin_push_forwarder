@@ -19,6 +19,10 @@ TITLE_KEYS = ("title", "subject", "summary", "标题")
 TEXT_KEYS = ("text", "content", "message", "body", "msg", "desc", "description", "内容")
 TAG_KEYS = ("tags", "tag", "group", "channel", "标签")
 TARGET_KEYS = ("targets", "target", "to")
+# 指定机器人。故意不收 platform / platforms 这类泛化写法 —— 推送方的消息体里
+# 很可能已经有个表示别的意思的 platform 字段（操作系统、来源系统…），
+# 认了它就会把一条本该全发的推送莫名其妙地路由到零个目标上。
+BOT_KEYS = ("bots", "bot", "bot_id", "bot_ids", "platform_id", "机器人")
 
 
 class PayloadError(ValueError):
@@ -33,6 +37,7 @@ class PushMessage:
     text: str = ""
     tags: list[str] = field(default_factory=list)
     target_ids: list[str] = field(default_factory=list)
+    bot_ids: list[str] = field(default_factory=list)
     at_mode: str | None = None
     at_users: list[str] = field(default_factory=list)
     urgent: bool = False
@@ -47,6 +52,7 @@ class PushMessage:
             "text": self.text,
             "tags": self.tags,
             "target_ids": self.target_ids,
+            "bot_ids": self.bot_ids,
             "at_mode": self.at_mode,
             "at_users": self.at_users,
             "urgent": self.urgent,
@@ -61,6 +67,7 @@ class PushMessage:
             text=str(raw.get("text") or ""),
             tags=[str(t) for t in (raw.get("tags") or [])],
             target_ids=[str(t) for t in (raw.get("target_ids") or [])],
+            bot_ids=[str(b) for b in (raw.get("bot_ids") or [])],
             at_mode=raw.get("at_mode"),
             at_users=[str(u) for u in (raw.get("at_users") or [])],
             urgent=bool(raw.get("urgent")),
@@ -84,6 +91,11 @@ def _truthy(value: Any) -> bool:
 
 def _flag(raw: dict[str, Any], keys: tuple[str, ...]) -> bool:
     return any(_truthy(raw[k]) for k in keys if k in raw)
+
+
+def _list_field(raw: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
+    """按别名取第一个出现的列表字段。"""
+    return _as_list(next((raw[k] for k in keys if k in raw), None))
 
 
 def _first_str(raw: dict[str, Any], keys: tuple[str, ...]) -> str:
@@ -112,6 +124,45 @@ def _as_list(value: Any) -> list[str]:
                 result.append(text)
         return result
     return [str(value).strip()] if str(value).strip() else []
+
+
+# 路由类字段：允许写在 URL 查询串里。正文相关的键不在其中 —— 从 URL 顶掉
+# 请求体里的正文只会制造"发出去的内容和推送方以为的不一样"这类难查的问题。
+ROUTING_KEYS = BOT_KEYS + TAG_KEYS + TARGET_KEYS + ("urgent", "force") + DRY_RUN_KEYS
+
+
+def query_to_dict(query: Any) -> dict[str, Any]:
+    """把查询串转成 dict，同名参数出现多次时合并成列表（``?bot=a&bot=b``）。"""
+    getall = getattr(query, "getall", None)
+    out: dict[str, Any] = {}
+    for key in query:
+        if key in out:
+            # MultiDict 迭代会把重复的键各吐一次，第一次就已经全取到了
+            continue
+        if getall is None:
+            out[key] = query.get(key)
+            continue
+        values = list(getall(key, []))
+        out[key] = values[0] if len(values) == 1 else values
+    return out
+
+
+def merge_query_routing(body: dict[str, Any], query: Any) -> dict[str, Any]:
+    """把查询串里的路由字段补进请求体，请求体里已有的键不动。
+
+    企业微信机器人那类推送通道，界面上只让填一个 URL，消息体是固定格式改不动。
+    把 ``bot`` / ``tags`` 这些写在 URL 上，那一侧就不用改代码也能指定机器人。
+    """
+    extra = {
+        k: v
+        for k, v in query_to_dict(query).items()
+        if k in ROUTING_KEYS and k not in body
+    }
+    if not extra:
+        return body
+    merged = dict(body)
+    merged.update(extra)
+    return merged
 
 
 def _parse_at(raw: Any) -> tuple[str | None, list[str]]:
@@ -279,7 +330,7 @@ def parse_wecom_payload(
             f"企业微信消息体里没有可转发的文本（msgtype={msgtype or '缺失'}）"
         )
 
-    tags = _as_list(next((raw[k] for k in TAG_KEYS if k in raw), None))
+    tags = _list_field(raw, TAG_KEYS)
     if not tags and default_tags:
         tags = list(default_tags)
     explicit_mode, explicit_users = _parse_at(raw.get("at"))
@@ -288,7 +339,8 @@ def parse_wecom_payload(
         title=title,
         text=text,
         tags=tags,
-        target_ids=_as_list(next((raw[k] for k in TARGET_KEYS if k in raw), None)),
+        target_ids=_list_field(raw, TARGET_KEYS),
+        bot_ids=_list_field(raw, BOT_KEYS),
         at_mode=explicit_mode or at_mode,
         at_users=explicit_users,
         urgent=_flag(raw, ("urgent", "force")),
@@ -322,7 +374,7 @@ def parse_payload(raw: Any, default_tags: list[str] | None = None) -> PushMessag
             "缺少消息内容，请提供 text（或 content / message / body）字段"
         )
 
-    tags = _as_list(next((raw[k] for k in TAG_KEYS if k in raw), None))
+    tags = _list_field(raw, TAG_KEYS)
     if not tags and default_tags:
         tags = list(default_tags)
 
@@ -332,7 +384,8 @@ def parse_payload(raw: Any, default_tags: list[str] | None = None) -> PushMessag
         title=title,
         text=text,
         tags=tags,
-        target_ids=_as_list(next((raw[k] for k in TARGET_KEYS if k in raw), None)),
+        target_ids=_list_field(raw, TARGET_KEYS),
+        bot_ids=_list_field(raw, BOT_KEYS),
         at_mode=at_mode,
         at_users=at_users,
         urgent=_flag(raw, ("urgent", "force")),

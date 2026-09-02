@@ -1204,6 +1204,153 @@ def test_push_endpoint_dry_run_returns_200():
     assert ctx.sent == []
 
 
+# ------------------------------------------------------------- 指定机器人
+
+
+def test_bots_restricts_dispatch_to_named_bot():
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+    add_target(plugin, QQ2, "g2")
+
+    result = asyncio.run(
+        plugin.dispatcher.dispatch(PushMessage(text="x", bot_ids=[QQ]))
+    )
+
+    assert result["summary"]["sent"] == 1
+    assert [umo for umo, _ in ctx.sent] == [f"{QQ}:{GROUP}:g1"]
+
+
+def test_bots_combines_with_tag_routing():
+    """机器人条件是在标签路由之上再筛一层，不是替代它。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1", tags=["alert"])
+    add_target(plugin, QQ, "g2", tags=["daily"])
+    add_target(plugin, QQ2, "g3", tags=["alert"])
+
+    asyncio.run(
+        plugin.dispatcher.dispatch(
+            PushMessage(text="x", tags=["alert"], bot_ids=[QQ])
+        )
+    )
+    assert [umo for umo, _ in ctx.sent] == [f"{QQ}:{GROUP}:g1"]
+
+
+def test_unknown_bot_is_reported_not_silent():
+    """写错 id 时不能静默返回 0，推送方得看到原因。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+
+    result = asyncio.run(
+        plugin.dispatcher.dispatch(PushMessage(text="x", bot_ids=["qq_bot_9"]))
+    )
+
+    assert ctx.sent == []
+    assert result["summary"]["sent"] == 0
+    details = [r["detail"] for r in result["results"]]
+    assert any("不存在" in d for d in details), details
+
+
+def test_named_bot_without_targets_is_reported():
+    """id 没写错，但那个机器人下没配目标 —— 和写错 id 是两种问题。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+    plugin.store.set_bot(QQ2, plugin.store.get_bot(QQ2))
+
+    result = asyncio.run(
+        plugin.dispatcher.dispatch(PushMessage(text="x", bot_ids=[QQ2]))
+    )
+
+    assert ctx.sent == []
+    details = [r["detail"] for r in result["results"]]
+    assert any("没有命中" in d for d in details), details
+
+
+def test_bots_narrows_explicit_targets_and_says_why():
+    plugin, ctx, _ = make_plugin()
+    t1 = add_target(plugin, QQ, "g1")
+    t2 = add_target(plugin, QQ2, "g2")
+
+    result = asyncio.run(
+        plugin.dispatcher.dispatch(
+            PushMessage(text="x", target_ids=[t1.id, t2.id], bot_ids=[QQ])
+        )
+    )
+
+    assert [umo for umo, _ in ctx.sent] == [f"{QQ}:{GROUP}:g1"]
+    dropped = [r for r in result["results"] if r["target_id"] == t2.id]
+    assert dropped and "不属于本次指定的机器人" in dropped[0]["detail"]
+
+
+def test_bot_resolved_by_remark_and_case():
+    """面板上显示的是备注，照着写也要能用；id 大小写抄错也认。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+    cfg = plugin.store.get_bot(QQ)
+    cfg.remark = "主号"
+    plugin.store.set_bot(QQ, cfg)
+
+    asyncio.run(plugin.dispatcher.dispatch(PushMessage(text="x", bot_ids=["主号"])))
+    assert len(ctx.sent) == 1
+
+    ctx.sent.clear()
+    asyncio.run(plugin.dispatcher.dispatch(PushMessage(text="x", bot_ids=[QQ.upper()])))
+    assert len(ctx.sent) == 1
+
+
+def test_duplicate_remark_refuses_to_guess():
+    """两台机器人同名时宁可报错，也不能猜一个发到别人的群里。"""
+    plugin, ctx, _ = make_plugin()
+    add_target(plugin, QQ, "g1")
+    add_target(plugin, QQ2, "g2")
+    for pid in (QQ, QQ2):
+        cfg = plugin.store.get_bot(pid)
+        cfg.remark = "重名"
+        plugin.store.set_bot(pid, cfg)
+
+    result = asyncio.run(
+        plugin.dispatcher.dispatch(PushMessage(text="x", bot_ids=["重名"]))
+    )
+    assert ctx.sent == []
+    assert any("不存在" in r["detail"] for r in result["results"])
+
+
+def test_bot_from_query_string_with_wecom_body():
+    """企微通道只能改 URL，?bot= 必须生效 —— 这条是那个场景的全链路。"""
+    plugin, ctx, _ = make_plugin(receiver_token="secret-token")
+    add_target(plugin, QQ, "g1")
+    add_target(plugin, QQ2, "g2")
+    receiver = with_fake_web(plugin)
+
+    resp = asyncio.run(
+        receiver._handle_push(
+            FakeRequest(
+                query={"key": "secret-token", "bot": QQ},
+                json_body={"msgtype": "text", "text": {"content": "CPU 95%"}},
+            )
+        )
+    )
+
+    assert resp.data.get("errcode") == 0
+    assert [umo for umo, _ in ctx.sent] == [f"{QQ}:{GROUP}:g1"]
+
+
+def test_query_routing_does_not_override_body():
+    plugin, ctx, _ = make_plugin(receiver_token="secret-token")
+    add_target(plugin, QQ, "g1")
+    add_target(plugin, QQ2, "g2")
+    receiver = with_fake_web(plugin)
+
+    asyncio.run(
+        receiver._handle_push(
+            FakeRequest(
+                query={"token": "secret-token", "bot": QQ},
+                json_body={"text": "x", "bot": QQ2},
+            )
+        )
+    )
+    assert [umo for umo, _ in ctx.sent] == [f"{QQ2}:{GROUP}:g2"]
+
+
 def _run_all() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

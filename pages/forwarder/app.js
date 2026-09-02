@@ -305,7 +305,9 @@
         'div',
         {
           class: 'bot' + (bot.platform_id === state.currentBotId ? ' active' : ''),
-          title: caps.note || '',
+          /* 卡片上显示的是备注，但推送里 bots 字段要写的是实例 id，
+             设了备注就看不到 id 了，所以挂在悬浮提示里 */
+          title: '实例 id：' + bot.platform_id + (caps.note ? '\n' + caps.note : ''),
           onclick: function () {
             selectBot(bot.platform_id);
           }

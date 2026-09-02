@@ -11,7 +11,9 @@ from core.models import AT_ALL, AT_NONE, AT_USERS  # noqa: E402
 from core.payload import (  # noqa: E402
     PayloadError,
     PushMessage,
+    merge_query_routing,
     parse_payload,
+    query_to_dict,
     render,
     split_text,
 )
@@ -337,6 +339,79 @@ def test_wecom_payload_supports_dry_run():
         {"msgtype": "text", "text": {"content": "自测"}, "dry_run": True}
     )
     assert msg.dry_run and msg.text == "自测"
+
+
+def test_bots_field_aliases():
+    """指定机器人的几种写法都要认。"""
+    assert parse_payload({"text": "x", "bot": "qq_1"}).bot_ids == ["qq_1"]
+    assert parse_payload({"text": "x", "bots": ["a", "b"]}).bot_ids == ["a", "b"]
+    assert parse_payload({"text": "x", "bot_id": "a"}).bot_ids == ["a"]
+    assert parse_payload({"text": "x", "platform_id": "a"}).bot_ids == ["a"]
+    # 逗号分隔（查询串里只能这么写）
+    assert parse_payload({"text": "x", "bots": "a, b"}).bot_ids == ["a", "b"]
+    assert parse_payload({"text": "x"}).bot_ids == []
+
+
+def test_generic_platform_key_is_not_a_bot_selector():
+    """推送方的 platform 字段常表示别的意思，认了它会把推送路由到零个目标。"""
+    msg = parse_payload({"text": "x", "platform": "linux", "platforms": ["k8s"]})
+    assert msg.bot_ids == []
+
+
+def test_bot_ids_survive_persistence():
+    """排队消息落盘后要保留机器人条件（dry_run 才是故意不落盘的那个）。"""
+    msg = PushMessage(text="x", bot_ids=["qq_1"], dry_run=True)
+    back = PushMessage.from_dict(msg.to_dict())
+    assert back.bot_ids == ["qq_1"]
+    assert back.dry_run is False
+
+
+def test_wecom_payload_supports_bots():
+    msg = parse_payload(
+        {"msgtype": "text", "text": {"content": "CPU 95%"}, "bot": "qq_1"}
+    )
+    assert msg.bot_ids == ["qq_1"] and msg.text == "CPU 95%"
+
+
+def test_merge_query_routing_only_touches_routing_keys():
+    """URL 上的路由字段补进 body，但不许顶掉正文，也不该把 token 塞进去。"""
+    body = {"msgtype": "text", "text": {"content": "hello"}}
+    merged = merge_query_routing(
+        body, {"bot": "qq_1", "tags": "alert", "key": "secret", "text": "别顶掉我"}
+    )
+    assert merged["bot"] == "qq_1" and merged["tags"] == "alert"
+    assert merged["text"] == {"content": "hello"}, "正文只认请求体"
+    assert "key" not in merged, "Token 不是路由字段，不该混进消息体"
+    assert body == {"msgtype": "text", "text": {"content": "hello"}}, "不能改原对象"
+
+
+def test_merge_query_routing_body_wins():
+    merged = merge_query_routing({"bot": "in_body"}, {"bot": "in_url"})
+    assert merged["bot"] == "in_body"
+
+
+def test_query_to_dict_keeps_repeated_params():
+    """?bot=a&bot=b 不能只剩一个 —— dict(query) 会丢掉前面的。"""
+
+    class MultiQuery:
+        """够用就好：模拟 aiohttp 的 MultiDict，迭代时重复键各吐一次。"""
+
+        def __init__(self, pairs):
+            self.pairs = pairs
+
+        def __iter__(self):
+            return iter(k for k, _ in self.pairs)
+
+        def get(self, key, default=None):
+            return next((v for k, v in self.pairs if k == key), default)
+
+        def getall(self, key, default=None):
+            found = [v for k, v in self.pairs if k == key]
+            return found or (default if default is not None else [])
+
+    out = query_to_dict(MultiQuery([("bot", "a"), ("bot", "b"), ("text", "x")]))
+    assert out["bot"] == ["a", "b"]
+    assert out["text"] == "x"
 
 
 def _run_all() -> int:

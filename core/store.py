@@ -146,6 +146,40 @@ class TargetStore:
             cfg = BotConfig(schedule=default_schedule())
         return cfg
 
+    def known_bot_ids(self) -> list[str]:
+        """出现过的机器人实例 id：有单独配置的 + 有转发目标的。"""
+        ids = list(self.bots.keys())
+        for target in self.targets:
+            if target.platform_id not in ids:
+                ids.append(target.platform_id)
+        return ids
+
+    def resolve_bot(self, spec: str) -> str:
+        """把推送里写的机器人标识解析成实例 id，解析不出返回空串。
+
+        实例 id 优先，其次不分大小写再试一次（推送方手抄 id 时大小写常对不上），
+        最后才认面板上的备注 —— 备注是机器人卡片上显示的那行字，不少人会照它写。
+
+        备注必须唯一才认：重名时宁可解析失败让推送方看到报错，也不要猜一个
+        发到别人的群里去。
+        """
+        text = (spec or "").strip()
+        if not text:
+            return ""
+        ids = self.known_bot_ids()
+        if text in ids:
+            return text
+        lowered = text.lower()
+        hits = [i for i in ids if i.lower() == lowered]
+        if len(hits) == 1:
+            return hits[0]
+        by_remark = [
+            pid
+            for pid, cfg in self.bots.items()
+            if (cfg.remark or "").strip().lower() == lowered
+        ]
+        return by_remark[0] if len(by_remark) == 1 else ""
+
     def set_bot(self, platform_id: str, cfg: BotConfig) -> None:
         self.bots[platform_id] = cfg
         self.save()

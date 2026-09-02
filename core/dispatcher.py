@@ -170,9 +170,11 @@ class Dispatcher:
         """挑出这条推送要发往的目标。
 
         返回 (可发送目标, 被排除的目标及原因)。显式指定 targets 时按 ID 精确匹配，
-        否则按标签路由。
+        否则按标签路由；再指定了 bots 时，只保留属于这些机器人的目标。
         """
         excluded: list[dict[str, Any]] = []
+        bot_ids, problems = self._resolve_bots(message.bot_ids)
+        excluded.extend(problems)
 
         if message.target_ids:
             candidates = []
@@ -193,6 +195,29 @@ class Dispatcher:
                 t for t in self.store.list_targets() if t.matches_tags(message.tags)
             ]
 
+        # 条件用 message.bot_ids 而不是解析后的 bot_ids：写了机器人但一个都没
+        # 解析出来时，该发给零个目标，不能退化成"没指定"把推送广发出去。
+        if message.bot_ids:
+            kept: list[Target] = []
+            for target in candidates:
+                if target.platform_id in bot_ids:
+                    kept.append(target)
+                elif message.target_ids and bot_ids:
+                    # 推送方点名的目标被机器人条件筛掉了，得说清为什么。
+                    # 走标签路由时"没命中"是常态，逐条报出来只会刷屏；
+                    # 一个都没解析出来时上面已经报过真正的原因了。
+                    excluded.append(
+                        self._record(target, STATUS_SKIPPED, "不属于本次指定的机器人")
+                    )
+            for pid in bot_ids:
+                if any(t.platform_id == pid for t in kept):
+                    continue
+                # 指定了机器人却一条都没命中：这是配置问题，不该静默返回 0
+                excluded.append(
+                    self._bot_record(pid, "该机器人下没有命中本次推送的转发目标")
+                )
+            candidates = kept
+
         usable: list[Target] = []
         for target in candidates:
             if not target.enabled:
@@ -207,6 +232,44 @@ class Dispatcher:
                 continue
             usable.append(target)
         return usable, excluded
+
+    def _resolve_bots(
+        self, specs: list[str]
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """解析推送里的机器人标识。
+
+        解析不出来的单独回报：指定了机器人却一条没发出去时，"id 写错了"和
+        "这个机器人下没配目标"要用完全不同的方式去修，混成一句话没法排障。
+        """
+        resolved: list[str] = []
+        problems: list[dict[str, Any]] = []
+        for spec in specs:
+            pid = self.store.resolve_bot(spec)
+            if not pid:
+                problems.append(
+                    self._bot_record(
+                        spec,
+                        "指定的机器人不存在（实例 id 与备注都没匹配到）",
+                        spec,
+                    )
+                )
+            elif pid not in resolved:
+                resolved.append(pid)
+        return resolved, problems
+
+    def _bot_record(
+        self, platform_id: str, detail: str, display_name: str = ""
+    ) -> dict[str, Any]:
+        """整台机器人级别的排除记录，没有对应的 target_id。"""
+        if not display_name:
+            display_name = self.store.get_bot(platform_id).remark or platform_id
+        return {
+            "target_id": "",
+            "platform_id": platform_id,
+            "display_name": display_name,
+            "status": STATUS_SKIPPED,
+            "detail": detail,
+        }
 
     def _record(self, target: Target, status: str, detail: str) -> dict[str, Any]:
         return {

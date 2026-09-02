@@ -20,7 +20,9 @@ from .payload import (
     PayloadError,
     PushMessage,
     is_wecom_payload,
+    merge_query_routing,
     parse_payload,
+    query_to_dict,
 )
 from .utils import ip_allowed
 
@@ -266,7 +268,8 @@ class Receiver:
     async def _read_body(self, request: Any) -> Any:
         """按 Content-Type 读取请求体，尽量宽容。"""
         if request.method == "GET":
-            return dict(request.query)
+            # 不用 dict()：同名参数出现多次时它只留最后一个，?tag=a&tag=b 会丢一半
+            return query_to_dict(request.query)
 
         content_type = (request.content_type or "").lower()
         if "json" in content_type:
@@ -310,6 +313,11 @@ class Receiver:
 
         # body 读出来才知道是不是企微格式（没带 key 但直接 POST 企微消息体的情况）
         wecom = wecom or is_wecom_payload(body)
+
+        if isinstance(body, dict) and request.method != "GET":
+            # 企微那类通道的消息体是固定格式改不动，把路由字段写在 URL 上
+            # （?bot=xxx&tags=alert）也能生效。GET 的 body 本来就是查询串，不用再合。
+            body = merge_query_routing(body, request.query)
 
         if not authed:
             in_body = str(body.get("token") or "") if isinstance(body, dict) else ""
