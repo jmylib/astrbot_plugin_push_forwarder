@@ -316,6 +316,8 @@ code {
 }
 
 .schedule-chip {
+  flex: 1;
+  min-width: 0;
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -324,6 +326,12 @@ code {
 
 .schedule-chip.limited {
   color: var(--warn);
+}
+
+.bot-foot-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
 }
 
 /* -------------------------------------------------------------------- 会话 */

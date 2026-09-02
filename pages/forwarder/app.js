@@ -204,6 +204,16 @@
     return baseUrl() + '?token=' + (masked ? maskToken(token) : encodeURIComponent(token));
   }
 
+  /* 某台机器人专属的推送地址：URL 上带 bot=<实例 id>，从这条地址推来的消息只
+     发给这台机器人下的目标。写 id 而不是备注 —— 备注随时可以改，改完地址就
+     失效了，而且重名的备注解析不出来。没配 Token 时 fullUrl 不带查询串，
+     所以分隔符得自己判。 */
+  function botUrl(bot) {
+    var url = fullUrl(false);
+    if (!url) return '';
+    return url + (url.indexOf('?') < 0 ? '?' : '&') + 'bot=' + encodeURIComponent(bot.platform_id);
+  }
+
   function renderWebhook() {
     var info = state.webhook;
     if (!info) return;
@@ -322,14 +332,30 @@
               text: bot.schedule_text || '全天不限',
               title: bot.schedule_text || '全天不限'
             }),
-            el('button', {
-              class: 'btn btn-ghost btn-sm',
-              text: '时段',
-              onclick: function (ev) {
-                ev.stopPropagation();
-                openScheduleModal('bot', bot);
-              }
-            })
+            el('div', { class: 'bot-foot-actions' }, [
+              el('button', {
+                class: 'btn btn-ghost btn-sm',
+                text: '地址',
+                title: '复制这台机器人专属的推送地址（含 Token），从该地址推来的消息只发给这台机器人下的目标',
+                onclick: function (ev) {
+                  ev.stopPropagation();
+                  var url = botUrl(bot);
+                  if (!url) {
+                    toast('推送地址还没加载出来，稍后再试', true);
+                    return;
+                  }
+                  copyText(url, (bot.remark || bot.platform_id) + ' 的推送地址');
+                }
+              }),
+              el('button', {
+                class: 'btn btn-ghost btn-sm',
+                text: '时段',
+                onclick: function (ev) {
+                  ev.stopPropagation();
+                  openScheduleModal('bot', bot);
+                }
+              })
+            ])
           ])
         ]
       );
